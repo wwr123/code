@@ -1,0 +1,17 @@
+int FindGreatestSumOfSubArray(vector<int> array) {
+        int sum=0;
+        int max=array[0];
+    	for(int i=0;i<array.size();++i)
+            {
+            sum=0;
+           for(int j=i;j<array.size();++j)
+               {
+               
+               sum+=array[j];
+               if(max<sum)
+                   max=sum;
+           }
+            
+        }
+        return max;
+    }
