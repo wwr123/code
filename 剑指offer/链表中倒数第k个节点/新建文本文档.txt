@@ -1,0 +1,28 @@
+class Solution {
+public:
+    ListNode* FindKthToTail(ListNode* pListHead, unsigned int k) {
+        if( pListHead==NULL||k<=0 )
+            return NULL;
+        ListNode* prev=pListHead;
+        ListNode* back=pListHead;
+        int num=k;
+        int count=0;
+        //走k-1步
+        while(num&&prev)
+        {
+            prev=prev->next;
+            num--;
+            count++;
+        }
+        while(prev)
+        {
+            prev=prev->next;
+            back=back->next;
+            count++;
+        }
+        if(count<k)  //k>链表的长度
+            return NULL;
+        else
+            return back;
+    }
+};
