@@ -1,0 +1,39 @@
+class Solution {
+public:
+    bool equal(double base,double num)
+    {
+        if((base-num>-0.0000001)&&(base-num<0.0000001))
+            return true;
+        else
+            return false;
+    }
+    double PowerExponent(double base,unsigned int absexponent)
+    {
+        if(absexponent==0)
+            return 1.0;
+        if(absexponent==1)
+            return base;
+        double result=PowerExponent(base,absexponent>>1);
+        result*=result;
+        if(absexponent&0x1==1) //指数为奇数
+        {
+        	result*=base;    
+        }
+        return result;
+        
+    }
+
+    double Power(double base, int exponent) {
+        if(equal(base,0.0)&&exponent<0) //底数为0，但指数不小于0，正常运行
+        {
+			return 0.0;            
+        }
+        unsigned int absexponent=exponent;
+        if(exponent<0)
+            absexponent=-exponent;
+        double result=PowerExponent(base,absexponent);
+        if(exponent<0)       //为负数
+            result=1.0/result;
+    	return result;
+    }
+};
