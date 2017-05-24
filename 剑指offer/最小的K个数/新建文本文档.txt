@@ -1,0 +1,59 @@
+class Solution {
+public:
+    void  DownAdjust(vector<int>& input,int i,int k)  //start.end为下标
+    {
+        int parent=i;
+        int child=2*parent+1;
+        while(child<=k)
+        {
+            if(child+1<=k&&input[child]<input[child+1])
+                child++;
+            if(input[parent]<input[child])
+            {
+                swap(input[parent],input[child]);
+                parent=child;
+                child=2*parent+1;
+            }
+            else
+                break;
+        }
+    }
+    vector<int> GetLeastNumbers_Solution(vector<int> input, int k) {
+        vector<int> v;
+       
+        if(input.size()==0||input.size()<k||k<=0)
+            return v;
+       
+       
+        //时间复杂度为o(nlogn)  用STL中的算法
+        /*sort(input.begin(),input.end());  //默认为升序
+        for(int i=0;i<k;++i)
+        {
+            v.push_back(input[i]);
+        }*/
+         
+        //用堆排序 时间复杂度为O（nlogk）  比较稳定
+        //建大堆
+        for(int i=(k-2)/2;i>=0;--i)
+        {
+            DownAdjust(input,i,k-1);
+        }
+        //调整使前k位数，按升序排列
+        for(int j=k;j<input.size();++j)
+        {
+            if(input[j]<input[0])
+            {
+                swap(input[j],input[0]);
+                DownAdjust(input,0,k-1);
+            }
+        }
+        
+        for(int m=k-1;m>=0;--m)
+        {
+            v.push_back(input[m]);
+        }
+        
+        return v;
+        
+    }
+};
