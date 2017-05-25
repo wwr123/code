@@ -1,0 +1,44 @@
+/*
+struct TreeNode {
+    int val;
+    struct TreeNode *left;
+    struct TreeNode *right;
+    TreeNode(int x) :
+            val(x), left(NULL), right(NULL) {
+    }
+};
+*/
+class Solution {
+public:
+        vector<vector<int> > Print(TreeNode* pRoot) {
+            vector<vector<int>> v;   //特别关键
+            if(pRoot==NULL)
+                return v;
+            queue<TreeNode*> q;
+            q.push(pRoot);   //先入根节点
+            
+            while(!q.empty())
+            {
+                int count=0;
+                int size=q.size();
+                vector<int> v1;   //用来保存同一层节点的值
+                
+                //用来对同一层的节点进行操作
+                while(count++<size)
+                {
+                    TreeNode* t=q.front();
+                    q.pop();
+                    v1.push_back(t->val);
+                    if(t->left!=NULL)
+                        q.push(t->left);
+                    if(t->right!=NULL)
+                        q.push(t->right);
+                }
+                
+                v.push_back(v1);
+            }
+                
+            return v;
+        }
+    
+};
