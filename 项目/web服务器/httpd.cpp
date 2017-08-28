@@ -2,17 +2,18 @@
 
 void httpd::process()
 {
-//	printf("process\n");
 	 accept_handler();
+    printf("procsessssssss\n");
 }
 void httpd::init(int fd)
 {
 	sock=fd;
+	m_linger=false;
 }
 void echo_404(int sock)
 {
 	char line[SIZE];
-	sprintf(line,"HTTP/1.0 404 Not Found \r\n");
+	sprintf(line,"HTTP/1.1 404 Not Found \r\n");
 	send(sock,line,strlen(line),0);
 	send(sock,"\r\n",strlen("\r\n"),0);
 	sprintf(line,"404 NOT Found \r\n");
@@ -65,7 +66,7 @@ void clear_head(int sock)
 	}while(ret>0 && ret != 1 && strcmp(line,"\n")!=0);
 }
 
-static int  echo_www(int sock,char* Path,ssize_t size)
+static int  echo_www(int sock,char* Path,ssize_t size,bool& m_linger)
 {
 	printf("not cgi\n");
 	int fd=open(Path,O_RDONLY);
@@ -74,32 +75,92 @@ static int  echo_www(int sock,char* Path,ssize_t size)
 		echo_errno(404,sock);  //差错处理404
 		return 8;
 	}
+    printf("errno\n");
+	//判断请求报头中的长连接状态
+	char buf[SIZE];
+	int ret=0;
+	do
+	{
+		//printf("hhhhhhh\n");
+		ret=get_line(sock,buf);
+		printf("buf:%s\n",buf);
+		if(ret!=-1&&strncmp(buf,"Connection: ",12)==0)
+		{
+			printf("strncmp con\n");
+			printf("buf+12:%s\n",buf+12);
+			if(strncmp(buf+12,"keep-alive",10)==0)
+			{
+	            printf("strcmp keep\n");
+				m_linger=true;
+				printf("m_linger:%d\n",m_linger);
+			}
+			
+		}
+	}while(ret!=-1&&strcmp(buf,"\n")!=0); //一直读到空行才结束
+   printf("keep alive end\n");
+
+	//回写响应
 	char line[SIZE];
-	sprintf(line,"HTTP/1.0 200 OK\r\n");
+	sprintf(line,"HTTP/1.1 200 OK\r\n");
 	send(sock,line,strlen(line),0);
-	char* content_type="Content-Type:text/html;charset=ISO-8859-1\r\n";
+	char* content_type="Content-Type: text/html;charset=ISO-8859-1\r\n";
+	send(sock,content_type,strlen(content_type),0);
+	if(m_linger==true)
+	{
+		content_type="Connection: keep-alive\r\n";
+		printf("keep\n");
+	}
+	else
+	{
+		content_type="Connection: close\r\n";
+		printf("not keep\n");
+	}
 	send(sock,content_type,strlen(content_type),0);
 	send(sock,"\r\n",strlen("\r\n"),0);
-	if(sendfile(sock,fd,0,size)<0)
+
+	printf("http end\n");
+
+	if(sendfile(sock,fd,0,size)<0)  //把fd中的内容写到sock中
 	{
 		echo_errno(404,sock);
 		close(fd);
 		return 9;
 	}
-	close(fd);
+    
+//	close(fd);
+	printf("ssend file\n");
 }
-int excu_cgi(int sock,char* method,char* Path,const char* querry)
+
+
+int excu_cgi(int sock,char* method,char* Path,const char* querry,bool& m_linger)
 {
 	//为了配置环境变量
-//printf("start cgi\n");	
 	char method_env[SIZE/8];
 	char querry_env[SIZE/4];
 	char content_len_env[SIZE/8];
-
 	int content_len=-1;
+    m_linger=false;
 	if(strcasecmp(method,"GET")==0)
 	{
-		clear_head(sock);
+		//clear_head(sock);
+		char buf[SIZE];
+		int ret=0;
+		do
+		{
+			//printf("hhhhhhh\n");
+			ret=get_line(sock,buf);
+			printf("buf:%s\n",buf);
+			if(ret!=-1&&strncmp(buf,"Connection: ",12)==0)
+			{
+				printf("strncmp\n");
+				if(strncmp(buf+12,"keep-alive",10)==0)
+				{
+					m_linger=true;
+					printf("m_linger:%d",m_linger);
+				}
+				
+			}
+		}while(ret!=-1&&strcmp(buf,"\n")!=0); //一直读到空行才结束
 	}
 	else
 	{
@@ -114,6 +175,11 @@ int excu_cgi(int sock,char* method,char* Path,const char* querry)
 	  		 	//conten t-legth  请求内容长度
  				content_len=atoi(buf+ 16);
 			}
+			else if(ret!=-1&&strncmp(buf,"Connection: ",12)==0)
+			{
+				if(strncmp(buf+12,"keep-alive",10)==0)
+					m_linger=true;
+			}
 		}while(ret!=-1&&strcmp(buf,"\n")!=0); //一直读到空行才结束
 
 		if(content_len<0)
@@ -124,13 +190,19 @@ int excu_cgi(int sock,char* method,char* Path,const char* querry)
 	}	
 		//回写响应行
 		char line[SIZE];
-		sprintf(line,"HTTP/1.0 200 OK\r\n");
+		sprintf(line,"HTTP/1.1 200 OK\r\n");
 		send(sock,line,strlen(line),0);
-	    char* content_type="Content-Type:text/html;charset=ISO-8859-1\r\n";
+	    char* content_type="Content-Type: text/html;charset=ISO-8859-1\r\n";
+		send(sock,content_type,strlen(content_type),0);
+		if(m_linger==true)
+			content_type="Connection: keep-alive\r\n";
+		else
+			 content_type="Connection: close\r\n";
 		send(sock,content_type,strlen(content_type),0);
 		send(sock,"\r\n",strlen("\r\n"),0);
-	//printf("cgi:::::::\n");
 
+		printf("htpp construct end\n");
+	
 		//创建2个管道，让父子进程进行通信
 		int input[2];  //站在子进程的角度命名
 		int output[2];
@@ -183,15 +255,16 @@ int excu_cgi(int sock,char* method,char* Path,const char* querry)
 			while(read(output[0], &ch, 1) > 0)
 			{
 		 		send(sock, &ch, 1, 0); 
+				//printf("ch:%c ",ch);
 			}
 			//非阻塞等待,拿到子进程的退出码
 			waitpid(id,NULL,0);
 		}
-
 }
+
 int httpd::accept_handler()
 {
-	//printf("accept start\n");
+	printf("accept handler\n");
 	char buf[SIZE];
 	char method[SIZE];
 	char path[SIZE]; 
@@ -202,6 +275,7 @@ int httpd::accept_handler()
 	int end=0;
 	char Path[SIZE];
 	int ret=0; 
+
 	int ret1 = get_line(sock, buf);  //ret1为读到一行的字节数
 	while(!isspace(buf[i]))
 	{
@@ -209,7 +283,6 @@ int httpd::accept_handler()
 		i++;
 	}
 	method[i]='\0';
-// printf("method:%s\n",method);
  	if(strcasecmp(method,"POST")==0) //cgi必定为1
 	{
 		cgi=1;
@@ -221,7 +294,6 @@ int httpd::accept_handler()
 			path[j++]=buf[i++];
 		}
 		path[j]='\0';
-//		printf("path:%s\n",path);
 	if(strcasecmp(method,"GET")==0) 
 	{
 		querry=path;
@@ -240,7 +312,6 @@ int httpd::accept_handler()
 	}
 	//Path wwwroot/aa/bb
 	sprintf(Path,"wwwroot%s",path); //添加根目录
-//	printf("Path:%s\n",Path);
 	if(Path[strlen(Path)-1]=='/')  //是文件夹
 	{
 		strcat(Path,"index.html"); 
@@ -249,38 +320,39 @@ int httpd::accept_handler()
 	struct stat st;
     if(stat(Path,&st)<0) //判断文件是否存在，失败-1，成功0
     {
-		//echo_errno();
-//	printf("hhhhhhhhhh1\n");
+		echo_errno(404,sock);
 		ret=7;
-		goto end;
+	    close(sock);
+		//goto end;
     }
 	if(S_ISDIR(st.st_mode))//是目录文件 S_ISDIR是一个宏
 	{
-//	printf("hhhhhhhhhh2\n");
 		strcat(Path,"/index.html");
 	}
 	else if((S_IXUSR&st.st_mode)||(S_IXGRP&st.st_mode)||(S_IXOTH&st.st_mode)) //可执行文件 
 	{
-//		printf("cgicgicgi\n");
 		cgi=1;
 	}
-//	printf("cgi:%d\n",cgi);
 	if(cgi)  //cgi模式
 	{
-	//	printf("is cgi\n");
-		ret=excu_cgi(sock,method,Path,querry);
-//		printf("cgi end\n");
+		ret=excu_cgi(sock,method,Path,querry,m_linger);
+		printf("cgi end\n");
 	}
 	else
 	{
 		//不是cgi模式
 		//清除头部信息
-		clear_head(sock);
-		ret=echo_www(sock,Path,st.st_size);
-	//	printf("not cgi end\n");
+		//clear_head(sock);
+		ret=echo_www(sock,Path,st.st_size,m_linger);
+		printf("not cgi end\n");
 	}
+    
+	if(m_linger==false)  //false
+	{
+		close(sock);  //把sock从epfd中删除
+		printf("false\n");
+	}
+	printf("true\n");
 
-end:
-	close(sock);
 	return ret;
 }

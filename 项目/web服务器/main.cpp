@@ -1,5 +1,3 @@
-#include<stdio.h>
-#include<stdlib.h>
 #include"httpd.h"
 #include"threadpool.cpp"
 int startup(char* ip,int port)
@@ -26,15 +24,33 @@ int startup(char* ip,int port)
 	}
 	return listen_sock;
 }
-
-void addfd(int epfd,int sock)
+int setnonblocking(int fd)
 {
- 	 printf("add fd\n");
+	int old_option=fcntl(fd,F_GETFL); //获得文件状态标志位
+	int new_option=old_option|O_NONBLOCK;  
+	fcntl(fd ,F_SETFL,new_option); //设置新的文件标志位
+	return old_option;  //目的是以便以后回复到原来的标志位
+}
+void addfd(int epfd,int sock,bool falg)
+{
 	 epoll_event event;
 	 event.data.fd=sock;
-	 event.events=EPOLLIN|EPOLLET|EPOLLRDHUP;
-	 epoll_ctl(epfd,EPOLL_CTL_ADD,sock,&event);
+	 if(falg==false)
+		event.events=EPOLLIN|EPOLLET|EPOLLRDHUP;
+	 else
+		 event.events=EPOLLIN|EPOLLET|EPOLLRDHUP|EPOLLONESHOT; //EPOLLONESHOT的意思是一个事件被线程之后就不会再被触发
+
+	 epoll_ctl(epfd,EPOLL_CTL_ADD,sock,&event); //把文件描述符注册到内核中
+     setnonblocking(sock);   //把文件描述符设置为非阻塞
 }
+void close_sock(int epfd,int sock)
+{
+	epoll_ctl(epfd,EPOLL_CTL_DEL,sock,0);
+	close(sock);
+	sock=-1;
+}
+
+
 int main(int argc,char* argv[])
 {
 	if(argc!=3)
@@ -53,23 +69,23 @@ int main(int argc,char* argv[])
 	//把listen_sock添加到epoll句柄中
 	epoll_event events[1000];
 	int epfd=epoll_create(10);
-	addfd(epfd,listen_sock);
+	addfd(epfd,listen_sock,false);
 
 	while(1)
 	{
-       // cout<<"while"<<endl;	
 //		daemon(1,0);
+        printf("while start\n");
         int num=epoll_wait(epfd,events,1000,-1);
 		if(num<0)
 			break;
-	//	printf("epoll wait end,num:%d\n",num);
+		printf("epoll wait end,num:%d\n",num);
 		for(int i=0;i<num;i++)
 		{
 			int sockfd=events[i].data.fd;
-		//	cout<<"sockfd:"<<sockfd<<endl;
+			cout<<"sockfd:"<<sockfd<<endl;
 			if(sockfd==listen_sock)
 			{
-			//	cout<<"listen sockfd:"<<sockfd<<endl;
+				cout<<"listen sockfd:"<<sockfd<<endl;
 			    struct sockaddr_in peer;
 			    socklen_t len=sizeof(peer);
 				int sock=accept(listen_sock,(struct sockaddr*)&peer,&len);
@@ -77,15 +93,21 @@ int main(int argc,char* argv[])
 				{
 					continue;
 				}
-			//	printf("accept sock:%d\n",sock);
-				addfd(epfd,sock);
+				printf("accept sock:%d\n",sock);
+                addfd(epfd,sock,true); //获取到sock后，添加到epoll				
 			}
+	       else if(events[i].events&(EPOLLRDHUP))
+	       {
+		    	//关闭连接
+		    	cout<<"quit"<<endl;
+		    	close_sock(epfd,sockfd);
+           }
 			else if(events[i].events&EPOLLIN)
 			{ 
 				pthread_t id;
-			//	printf("epoll in\n");
+				printf("epoll in\n");
 			    t.appendrequest(&arr[sockfd]);//把任务添加到队列中
-				//cout<<"append end"<<endl;	
+				printf("append end\n");
 			}
 		}
 	}
