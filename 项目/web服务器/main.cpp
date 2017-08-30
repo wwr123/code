@@ -1,5 +1,10 @@
 #include"httpd.h"
 #include"threadpool.cpp"
+#define TIMEOUT 5
+static int pipe[2];
+static int epfd=0;
+static time_heap time_he;
+
 int startup(char* ip,int port)
 {
 	int listen_sock=socket(AF_INET,SOCK_STREAM,0);
@@ -47,10 +52,45 @@ void close_sock(int epfd,int sock)
 {
 	epoll_ctl(epfd,EPOLL_CTL_DEL,sock,0);
 	close(sock);
-	sock=-1;
 }
 
-
+void addsig(int sig,void (handler) (int))
+{
+	struct sigaction sa;
+	memset(&sa,'\0',sizeof(sa));
+	sa.sa_handler=handler;
+	sa.sa_flags|=SA_RESTART; //被中断时，重启
+    //将所有信号添加到mask字段中
+	sigfillset(&sa.sa_mask);  //在信号处理函数时，屏蔽mask字段中的信号，处理完后，信号被激活
+	assert(sigaction(sig,&sa,NULL)!=-1);
+}
+void sig_handler(int sig)
+{
+	send(pipe[1],(char*)&msg,1,0);
+}
+void addsig1(int sig)
+{
+	struct sigaction sa;
+	memset(&sa,'\0',sizeof(sa));
+	sa.sa_handler=sig_handler;
+	sa.sa_flags|=SA_RESTART;
+	sigfillset(&sa.sa_mask);
+	assert(sigaction(sig,&sa,NULL)!=-1);
+}
+//时间到期时调用的函数
+//删除非活动连接sock上的注册事件
+void cb_func(client_data* user)
+{
+	epoll_ctl(epfd,EPOLL_CTL_DEL,user->sockfd);
+	close(user->sockfd);
+	printf("close sockv fd:%d\n",user->sockfd);
+}
+//超时的处理函数
+void time_handler()
+{
+	time_he.tick();
+	alarm(TIMEOUT); //alarm函数只会触发一次信号，需要不断的触发
+}
 int main(int argc,char* argv[])
 {
 	if(argc!=3)
@@ -58,22 +98,44 @@ int main(int argc,char* argv[])
 		exit(1);
 	}
 	int listen_sock=startup(argv[1],atoi(argv[2]));
-
+    
+	//忽略SIGPIPE信号
+	//SIGPIPE:服务器关闭了连接，客户端还在发送数据，就会触发这个信号，告诉服务器不用写了
+	//SIG_IGN:是无返回值的函数指针，表示忽略信号的处理程序
+	addsig(SIGPIPE,SIG_IGN);
+    
+	//创建线程池
 	threadpool<httpd> t(10,1000);
 	httpd arr[1000];
 	for(int i=0;i<1000;i++)
 	{
 		arr[i].init(i);
 	}
-
-	//把listen_sock添加到epoll句柄中
+    
+	//创建一个epoll句柄
 	epoll_event events[1000];
-	int epfd=epoll_create(10);
+	epfd=epoll_create(10);
+	//把listen_sock添加到epoll句柄中
 	addfd(epfd,listen_sock,false);
 
-	while(1)
+	//创建一个全双工管道，子进程将检测到超时的信号写到管道中，父进程读
+	int ret=socketpair(PF_UNIX,SOCK_STREAM,0,pipe);
+	assert(ret!=-1);
+	setnonblocking(pipe[1]); //写端设置为非阻塞
+	addfd(pipe[0]); //把读端添加到epoll中
+	
+	//安装信号
+	addsig1(SIGALRM); //闹钟信号
+	addsig1(SIGTERM); //终止进程信号
+    
+	bool stop_server=false;
+	int timeout=false;
+	alarm(TIMEOUT);
+    client_data user[1000];
+
+	while(!stop_server)
 	{
-//		daemon(1,0);
+		//daemon(1,0);
         printf("while start\n");
         int num=epoll_wait(epfd,events,1000,-1);
 		if(num<0)
@@ -82,10 +144,13 @@ int main(int argc,char* argv[])
 		for(int i=0;i<num;i++)
 		{
 			int sockfd=events[i].data.fd;
+
 			cout<<"sockfd:"<<sockfd<<endl;
+
 			if(sockfd==listen_sock)
 			{
 				cout<<"listen sockfd:"<<sockfd<<endl;
+
 			    struct sockaddr_in peer;
 			    socklen_t len=sizeof(peer);
 				int sock=accept(listen_sock,(struct sockaddr*)&peer,&len);
@@ -93,22 +158,78 @@ int main(int argc,char* argv[])
 				{
 					continue;
 				}
+
 				printf("accept sock:%d\n",sock);
-                addfd(epfd,sock,true); //获取到sock后，添加到epoll				
+
+                addfd(epfd,sock,true); //获取到sock后，添加到epoll
+				//将数据添加到用户数据类中
+				user[sock].addr=peer;
+				user[sock].sockfd=sock;
+				//创建一个定时器
+				heap_timer* timer=new heap_timer;
+				timer->user_data=&user[sock];
+				timer->cb_func=cb_func;
+				time_t cur=time(NULL);
+				timer->expire=cur+3*TIMEOUT;
+				arr[sock].timer=timer; //添加到httpd
+				time_he.add(timer); //添加到时间堆中
 			}
-	       else if(events[i].events&(EPOLLRDHUP))
-	       {
+			else if(sockfd==pipe[0]&&(events[i].events&EPOLLIN))  //信号被触发了
+			{
+				int sig;
+				char buf[1024];
+				int ret=recv(pipe[0],buf,sizeof(buf),0);
+				if(ret<=0)
+				{
+					continue;
+				}
+				else
+				{
+					for(int i=0;i<ret;i++)
+					{
+						switch(buf[i])
+						{
+							case SIGALRM:
+								{
+									timeout=true; //超时了
+								    break;
+								}
+							case SIGTERM:
+								stop_srever=true;
+						}
+					}
+				}
+			}
+	        else if(events[i].events&(EPOLLRDHUP)) //读端关闭 
+	        {
+				//从时间堆中删除定时器，并执行他的回调函数，即从epoll中清除
 		    	//关闭连接
-		    	cout<<"quit"<<endl;
-		    	close_sock(epfd,sockfd);
-           }
+		    	//close_sock(epfd,sockfd);
+				heap_timer* timer=user[sockfd]->timer;
+				cb_func(&user[sockfd]); 
+				if(!timer)
+				{
+					time_he.delete_timer(timer);
+				}
+            }
 			else if(events[i].events&EPOLLIN)
 			{ 
-				pthread_t id;
+				//读事件就绪，调整对应定时器，以延迟关闭连接
+				heap_timer* timer=user[sockfd]->timer;
+				time_t cur=time(NULL);
+				timer->expire=cur+3*TIMEOUT;
+				time_he.adjust_timer(timer);
+                
 				printf("epoll in\n");
 			    t.appendrequest(&arr[sockfd]);//把任务添加到队列中
 				printf("append end\n");
+				
 			}
+		}
+		if(timeout) //超时了
+		{
+			time_handler();
+			timeout=false;
 		}
 	}
     close(epfd);
